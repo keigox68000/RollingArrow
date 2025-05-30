@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>矢印大回転</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #282c34; /* ダークテーマ背景 */
+            font-family: 'Arial', sans-serif;
+            color: #fff; /* テキストカラー */
+            text-align: center;
+        }
+        .game-container {
+            display: flex;
+            align-items: flex-start; /* 上端揃え */
+            gap: 20px; /* キャンバスとスコアパネルの間隔 */
+            margin-bottom: 20px; /* メッセージエリアとの間隔 */
+            flex-wrap: wrap; /* 画面が小さい場合に折り返す */
+            justify-content: center; /* 折り返した場合に中央揃え */
+        }
+        canvas {
+            border: 2px solid #61dafb; /* 明るいボーダー */
+            border-radius: 10px;
+            background-color: #20232a; /* キャンバス背景 */
+            box-shadow: 0 0 15px rgba(97, 218, 251, 0.5);
+            cursor: pointer; /* クリック可能なことを示すカーソル */
+        }
+        #scoresPanel {
+            width: 220px; /* スコアパネルの幅 */
+            padding: 15px;
+            background-color: #3c4049; /* スコアパネル背景 */
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            gap: 8px; /* パネル内の要素の間隔 */
+        }
+        #scoresPanel h2 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            color: #61dafb; /* 見出しカラー */
+            text-align: center;
+            font-size: 1.4em;
+        }
+        #scoresPanel p {
+            margin: 4px 0;
+            font-size: 1em;
+            line-height: 1.4;
+        }
+        #scoresPanel hr {
+            border: 0;
+            height: 1px;
+            background-color: #555c66;
+            margin: 8px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>矢印大回転</h1>
+
+    <div class="game-container">
+        <canvas id="gameCanvas" width="500" height="400"></canvas>
+        <div id="scoresPanel">
+            <h2>スコア詳細</h2>
+            <p id="currentStageNumberDisplay">現在のステージ: 1</p>
+            <hr>
+            <p id="stage1ScoreDisplay">ステージ 1: -</p>
+            <p id="stage2ScoreDisplay">ステージ 2: -</p>
+            <p id="stage3ScoreDisplay">ステージ 3: -</p>
+            <hr>
+            <p id="totalScoreDisplay">合計スコア: 0点</p>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // --- ゲーム設定 ---
+        const MAX_STAGES = 3;
+        const ARROW_LENGTH = 150;
+        const ARROW_LINE_WIDTH = 8;
+        const speeds = [0.04, 0.07, 0.11]; // 矢印の回転速度
+
+        // --- 星の設定 ---
+        const NUM_STARS = 100; 
+        const starBaseSpeedMin = 0.6; 
+        const starBaseSpeedMax = 1.8; 
+        const starStageSpeedMultiplier = [1.0, 2.0, 3.0]; 
+        const starMinBrightness = 40; // 星の最小明度 (HSLのL値, 0-100)
+        const starMaxBrightness = 100; // 星の最大明度
+        const starMinOpacity = 0.3;   // 星の最小透明度
+        const starMaxOpacity = 1.0;   // 星の最大透明度
+        const starShineSpeed = 0.01; // 星の明滅速度
+
+        let stars = [];
+        let currentStarSpeedMultiplier = starStageSpeedMultiplier[0];
+
+        // --- ゲーム変数 ---
+        let currentStage = 1;
+        let totalScore = 0;
+        let lastRoundScore = 0;
+        let stageScores = [null, null, null];
+        let arrowAngle = 0;
+        let currentArrowSpeed = speeds[0];
+        let isSpinning = true; 
+        let gameState = "IDLE";
+        let rainbowHue = 0; 
+        let animationFrameId;
+        let countdownValue = 3;
+        let countdownInterval;
+        let canvasBigText = "";   
+        let canvasStatusText = ""; 
+        let gameOverResetTimer = null;
+
+        // --- UI要素 (スコアパネルのみ) ---
+        const stage1ScoreDisplay = document.getElementById('stage1ScoreDisplay');
+        const stage2ScoreDisplay = document.getElementById('stage2ScoreDisplay');
+        const stage3ScoreDisplay = document.getElementById('stage3ScoreDisplay');
+        const totalScoreDisplay = document.getElementById('totalScoreDisplay');
+        const currentStageNumberDisplay = document.getElementById('currentStageNumberDisplay');
+
+        // --- 星の初期化 ---
+        function createStar() {
+            const baseSpeed = Math.random() * (starBaseSpeedMax - starBaseSpeedMin) + starBaseSpeedMin;
+            const initialOpacity = Math.random() * (starMaxOpacity - starMinOpacity) + starMinOpacity;
+            return {
+                x: Math.random() * canvas.width,
+                y: Math.random() * canvas.height,
+                size: Math.random() * 2.5 + 0.5, 
+                opacity: initialOpacity,
+                hue: Math.random() * 360, 
+                baseSpeed: baseSpeed,
+                brightness: Math.random() * (starMaxBrightness - starMinBrightness) + starMinBrightness, // 固有の明度
+                shineDirection: Math.random() < 0.5 ? 1 : -1, // 透明度の変化方向 (1:増加, -1:減少)
+                currentOpacity: initialOpacity // 現在の透明度（明滅用）
+            };
+        }
+
+        function initializeStars() {
+            stars = [];
+            for (let i = 0; i < NUM_STARS; i++) {
+                stars.push(createStar());
+            }
+            currentStarSpeedMultiplier = starStageSpeedMultiplier[currentStage - 1];
+        }
+
+        // --- 星の描画 ---
+        function drawStars() {
+            stars.forEach(star => {
+                ctx.beginPath();
+                ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+                // 各星の色相、固有の明度、変化する透明度を適用
+                ctx.fillStyle = `hsla(${star.hue}, 100%, ${star.brightness}%, ${star.currentOpacity})`; 
+                ctx.fill();
+            });
+        }
+
+        // --- 星の更新 ---
+        function updateStars() {
+            stars.forEach(star => {
+                // 落下処理
+                star.y += star.baseSpeed * currentStarSpeedMultiplier; 
+                if (star.y > canvas.height + star.size) { 
+                    star.y = -star.size; 
+                    star.x = Math.random() * canvas.width; 
+                    star.hue = Math.random() * 360;
+                    star.baseSpeed = Math.random() * (starBaseSpeedMax - starBaseSpeedMin) + starBaseSpeedMin;
+                    star.brightness = Math.random() * (starMaxBrightness - starMinBrightness) + starMinBrightness;
+                    star.currentOpacity = Math.random() * (starMaxOpacity - starMinOpacity) + starMinOpacity; // 再配置時に透明度もリセット
+                    star.shineDirection = Math.random() < 0.5 ? 1 : -1;
+                }
+
+                // 明滅処理 (透明度の変化)
+                star.currentOpacity += starShineSpeed * star.shineDirection;
+                if (star.currentOpacity > starMaxOpacity) {
+                    star.currentOpacity = starMaxOpacity;
+                    star.shineDirection = -1; // 透明度を減少方向に変更
+                } else if (star.currentOpacity < starMinOpacity) {
+                    star.currentOpacity = starMinOpacity;
+                    star.shineDirection = 1; // 透明度を増加方向に変更
+                }
+            });
+        }
+
+
+        // --- ゲーム要素の描画関数 ---
+        function drawGameElements() {
+            // 矢印の描画
+            ctx.save();
+            ctx.translate(canvas.width / 2, canvas.height / 2);
+            ctx.rotate(arrowAngle);
+            const L = ARROW_LENGTH;
+            const headHeight = L * 0.4;
+            const headWidth = L * 0.4;
+            const shaftWidth = L * 0.18;
+            
+            ctx.beginPath();
+            ctx.moveTo(0, -L / 2); 
+            ctx.lineTo(-headWidth / 2, -L / 2 + headHeight);
+            ctx.lineTo(-shaftWidth / 2, -L / 2 + headHeight);
+            ctx.lineTo(-shaftWidth / 2, L / 2);
+            ctx.lineTo(shaftWidth / 2, L / 2);
+            ctx.lineTo(shaftWidth / 2, -L / 2 + headHeight);
+            ctx.lineTo(headWidth / 2, -L / 2 + headHeight);
+            ctx.closePath();
+
+            ctx.fillStyle = 'black'; 
+            ctx.fill();
+            
+            ctx.strokeStyle = `hsl(${rainbowHue}, 100%, 65%)`;
+            ctx.lineWidth = ARROW_LINE_WIDTH;
+            ctx.lineJoin = 'round';
+            ctx.lineCap = 'round';
+            ctx.stroke();
+            ctx.restore();
+
+            if (canvasBigText) {
+                ctx.save();
+                if (canvasBigText === "スタート！") {
+                    ctx.font = "bold 90px Arial"; 
+                } else {
+                    ctx.font = "bold 120px Arial"; 
+                }
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.strokeStyle = "black";
+                ctx.lineWidth = 8;
+                ctx.strokeText(canvasBigText, canvas.width / 2, canvas.height / 2);
+                ctx.fillStyle = "white";
+                ctx.fillText(canvasBigText, canvas.width / 2, canvas.height / 2);
+                ctx.restore();
+            }
+
+            if (canvasStatusText) {
+                ctx.save();
+                ctx.font = "bold 24px Arial"; 
+                ctx.fillStyle = "#ffd700";   
+                ctx.textAlign = "center";
+                ctx.textBaseline = "bottom"; 
+                const lines = canvasStatusText.split('\n');
+                const lineHeight = 30; 
+                let startY = canvas.height - 20 - (lines.length -1) * lineHeight ;
+                for (let i = 0; i < lines.length; i++) {
+                    ctx.fillText(lines[i], canvas.width / 2, startY + (i * lineHeight));
+                }
+                ctx.restore();
+            }
+        }
+
+        // --- スコア計算 ---
+        function calculateScore(angle) {
+            let normAngle = (angle % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI);
+            let deviation = Math.min(normAngle, 2 * Math.PI - normAngle); 
+            let score = Math.round(180 * (1 - deviation / Math.PI)); 
+            return score;
+        }
+
+        // --- ゲーム表示更新 ---
+        function updateGameDisplay() {
+            stage1ScoreDisplay.textContent = stageScores[0] !== null ? `ステージ 1: ${stageScores[0]}点` : "ステージ 1: -";
+            stage2ScoreDisplay.textContent = stageScores[1] !== null ? `ステージ 2: ${stageScores[1]}点` : "ステージ 2: -";
+            stage3ScoreDisplay.textContent = stageScores[2] !== null ? `ステージ 3: ${stageScores[2]}点` : "ステージ 3: -";
+            totalScoreDisplay.textContent = `合計スコア: ${totalScore}点`;
+
+            if (gameState === "GAME_OVER") {
+                currentStageNumberDisplay.textContent = "ゲーム終了";
+            } else {
+                currentStageNumberDisplay.textContent = `現在のステージ: ${currentStage}`;
+            }
+            
+            switch (gameState) {
+                case "IDLE":
+                    if (currentStage === 1) {
+                         canvasStatusText = `ステージ ${currentStage}\nクリックでカウントダウン開始！`;
+                    } else {
+                         canvasStatusText = `ステージ ${currentStage}\nクリックして開始！`;
+                    }
+                    break;
+                case "COUNTDOWN":
+                    canvasStatusText = `ステージ ${currentStage}\nまもなく開始...`;
+                    break;
+                case "SPINNING":
+                    canvasStatusText = "クリックしてストップ！";
+                    break;
+                case "RESULT":
+                    canvasStatusText = `スコア ${lastRoundScore}点！\nクリックで次のステージへ`;
+                    break;
+                case "GAME_OVER":
+                    canvasStatusText = `ゲーム終了！\n最終スコア: ${totalScore}点`; 
+                    break;
+                default:
+                    canvasStatusText = ""; 
+            }
+        }
+        
+        function startCountdown() {
+            countdownValue = 3;
+            canvasBigText = String(countdownValue); 
+            updateGameDisplay(); 
+
+            if (countdownInterval) clearInterval(countdownInterval);
+            
+            countdownInterval = setInterval(() => {
+                countdownValue--;
+                if (countdownValue > 0) {
+                    canvasBigText = String(countdownValue);
+                } else if (countdownValue === 0) {
+                    canvasBigText = "スタート！";
+                } else { 
+                    clearInterval(countdownInterval);
+                    canvasBigText = ""; 
+                    gameState = "SPINNING";
+                    isSpinning = true; 
+                    updateGameDisplay(); 
+                }
+            }, 1000);
+        }
+
+        function gameLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height); 
+
+            updateStars(); 
+            drawStars();   
+
+            if (isSpinning) { 
+                arrowAngle += currentArrowSpeed;
+                rainbowHue = (rainbowHue + 2) % 360; 
+            }
+            
+            drawGameElements(); 
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        function initGame() {
+            if (gameOverResetTimer) { 
+                clearTimeout(gameOverResetTimer);
+                gameOverResetTimer = null;
+            }
+            currentStage = 1;
+            totalScore = 0;
+            lastRoundScore = 0;
+            stageScores = [null, null, null];
+            arrowAngle = Math.PI / 2 * Math.floor(Math.random() * 4); 
+            currentArrowSpeed = speeds[0];
+            currentStarSpeedMultiplier = starStageSpeedMultiplier[0]; 
+            isSpinning = true; 
+            gameState = "IDLE";
+            canvasBigText = ""; 
+            
+            if (countdownInterval) clearInterval(countdownInterval);
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            
+            initializeStars(); 
+            updateGameDisplay(); 
+            gameLoop(); 
+        }
+
+        canvas.addEventListener('click', () => {
+            handleInteraction();
+        });
+        
+        function handleInteraction() {
+            const oldGameState = gameState; 
+
+            if (gameState === "IDLE") {
+                if (currentStage === 1) {
+                    gameState = "COUNTDOWN";
+                    startCountdown(); 
+                } else { 
+                    gameState = "SPINNING";
+                    isSpinning = true; 
+                }
+            } else if (gameState === "SPINNING") {
+                isSpinning = false; 
+                lastRoundScore = calculateScore(arrowAngle);
+                totalScore += lastRoundScore;
+                if(currentStage -1 < stageScores.length) {
+                    stageScores[currentStage - 1] = lastRoundScore;
+                }
+
+                if (currentStage < MAX_STAGES) {
+                    gameState = "RESULT";
+                } else {
+                    gameState = "GAME_OVER";
+                    if (gameOverResetTimer) clearTimeout(gameOverResetTimer); 
+                    gameOverResetTimer = setTimeout(() => {
+                        if(gameState === "GAME_OVER"){ 
+                           initGame();
+                        }
+                    }, 5000); 
+                }
+            } else if (gameState === "RESULT") {
+                currentStage++;
+                if (currentStage -1 < speeds.length) { 
+                    currentArrowSpeed = speeds[currentStage - 1]; 
+                }
+                if (currentStage -1 < starStageSpeedMultiplier.length) { 
+                    currentStarSpeedMultiplier = starStageSpeedMultiplier[currentStage - 1];
+                }
+                isSpinning = true; 
+                gameState = "SPINNING";
+                arrowAngle = Math.PI / 2 * Math.floor(Math.random() * 4); 
+            } else if (gameState === "GAME_OVER") {
+                initGame(); 
+                return; 
+            } else if (gameState === "COUNTDOWN") {
+                return; 
+            }
+            
+            if (oldGameState !== gameState || gameState === "SPINNING" || gameState === "RESULT" || gameState === "IDLE") {
+                 updateGameDisplay();
+            }
+        }
+
+        window.onload = function() {
+            initGame();
+        };
+    </script>
+</body>
+</html>
